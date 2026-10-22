@@ -225,98 +225,107 @@ function letterGrade(score) {
 }
 
 export function gradeToken(onchain, market, concentration, assessment, coverage) {
-  let score = 72;
-  const reasons = [];
-  const missing = [];
-  if (!coverage.onchain || !onchain?.exists || !coverage.market || !market?.primaryPool) {
+  // An evidence-based grade is always attempted if at least one meaningful
+  // observation exists. Missing feeds reduce confidence, not actual risk.
+  const verifiedMint = coverage.onchain === true && onchain?.verified === true && onchain?.exists === true;
+  const confirmedInvalid = coverage.onchain === true && onchain?.verified === true && onchain?.exists === false;
+  const indexedPair = coverage.market === true && Boolean(market?.primaryPool);
+  const pool = indexedPair ? market.primaryPool : null;
+  const concentrationPresent = verifiedMint && coverage.largestAccounts === true && concentration?.top10TokenAccountsPct != null;
+  const liquidityPresent = pool?.liquidityUsd != null;
+  const volumePresent = pool?.volume24hUsd != null;
+  const capPresent = pool?.marketCap != null || pool?.fdv != null;
+  const coverageScore = clamp(
+    (verifiedMint || confirmedInvalid ? 45 : 0) + (indexedPair ? 25 : 0) +
+    (liquidityPresent ? 7 : 0) + (volumePresent ? 7 : 0) + (capPresent ? 3 : 0) +
+    (concentrationPresent ? 8 : 0) + (coverage.similar && indexedPair ? 5 : 0),
+    0, 100,
+  );
+  const confidence = coverageScore >= 85 ? 'HIGH' : coverageScore >= 60 ? 'MEDIUM' : coverageScore > 0 ? 'LOW' : 'NONE';
+  const basis = verifiedMint && indexedPair ? 'ON-CHAIN + DEX' : verifiedMint ? 'ON-CHAIN ONLY' : indexedPair ? 'DEX ONLY' : 'NO VERIFIED FEED';
+  const unavailable = [];
+  if (!verifiedMint && !confirmedInvalid) unavailable.push('verified Solana mint controls (RPC missing or unavailable)');
+  if (!indexedPair) unavailable.push('indexed DEX trading pair (not indexed or feed unavailable)');
+  if (!liquidityPresent) unavailable.push('indexed liquidity depth');
+  if (!volumePresent) unavailable.push('indexed 24H volume');
+  if (!capPresent) unavailable.push('indexed market capitalization / FDV');
+  if (!concentrationPresent) unavailable.push('top token-account concentration');
+  if (!coverage.similar) unavailable.push('similar-name search coverage');
+  unavailable.push('verified insider / bundled trading analysis', '3D / 7D / 30D historical performance');
+  const common = {
+    confidence,
+    coverageScore,
+    basis,
+    partial: coverageScore < 100,
+    unavailable,
+    formula: 'V2 EVIDENCE-WEIGHTED infrastructure indicator. Grades use only observed mint controls and indexed DEX measurements. Missing measurements reduce confidence and limit the maximum grade; they are not treated as confirmed misconduct. This does NOT determine legitimacy, ownership, insider activity, or investment safety.',
+  };
+  if (confirmedInvalid) {
     return {
-      score: null, grade: null, stance: 'UNRATED', reasons: ['Insufficient verified mint and DEX pair data to issue an infrastructure grade.'],
-      unavailable: [!coverage.onchain || !onchain?.exists ? 'verified mint controls' : 'indexed DEX trading pair', '1D/3D/7D/30D history', 'bundle / insider %'],
-      formula: 'No infrastructure grade is issued without verified on-chain mint data and an indexed trading pair.',
-      partial: true,
+      ...common, score: 0, grade: 'F-', stance: 'NOT A TOKEN',
+      reasons: [onchain.reason || 'This address is not a valid SPL token mint on the responding RPC.'],
     };
   }
-  if (!coverage.onchain) {
-    score -= 22;
-    reasons.push('On-chain coverage incomplete.');
-  }
-  if (onchain?.exists === false) {
-    score = 18;
-    reasons.push('Address did not resolve to a valid SPL mint.');
-  }
-  if (onchain?.mintAuthority) {
-    score -= 18;
-    reasons.push('Mint authority remains active.');
-  } else if (onchain?.exists) {
-    score += 8;
-    reasons.push('Mint authority appears revoked.');
-  }
-  if (onchain?.freezeAuthority) {
-    score -= 12;
-    reasons.push('Freeze authority remains active.');
-  } else if (onchain?.exists) {
-    score += 6;
-    reasons.push('Freeze authority appears revoked.');
+  if (!verifiedMint && !indexedPair) {
+    // Assigning an A-F letter with zero evidence would invent a result.
+    return {
+      ...common, score: null, grade: 'U', stance: 'FEEDS UNAVAILABLE',
+      reasons: ['No verified SPL mint or indexed trading pair could be observed. Re-scan or configure SOLANA_RPC_URL / HELIUS_API_KEY on the server.'],
+    };
   }
 
-  const elevatedCount = assessment.signals.filter((s) => s.severity === 'elevated').length;
-  const attentionCount = assessment.signals.filter((s) => s.severity === 'attention').length;
-  score -= Math.min(20, elevatedCount * 7);
-  score -= Math.min(10, attentionCount * 3);
-
-  const liquidity = market?.primaryPool?.liquidityUsd ?? null;
-  if (liquidity !== null) {
-    if (liquidity >= 100000) { score += 12; reasons.push('Strong indexed liquidity.'); }
-    else if (liquidity >= 25000) { score += 8; reasons.push('Healthy indexed liquidity.'); }
-    else if (liquidity >= 5000) { score += 3; reasons.push('Moderate indexed liquidity.'); }
-    else { score -= 8; reasons.push('Thin indexed liquidity.'); }
-  } else missing.push('liquidity depth');
-
-  const volume24 = market?.primaryPool?.volume24hUsd ?? null;
-  if (volume24 !== null) {
-    if (volume24 >= 250000) { score += 10; reasons.push('Strong 24H trading activity.'); }
-    else if (volume24 >= 50000) { score += 6; reasons.push('Solid 24H trading activity.'); }
-    else if (volume24 >= 5000) { score += 2; reasons.push('Some measurable 24H trading activity.'); }
-    else { score -= 6; reasons.push('Very light 24H trading activity.'); }
-  } else missing.push('24H volume');
-
-  const marketCap = market?.primaryPool?.marketCap ?? market?.primaryPool?.fdv ?? null;
-  if (marketCap !== null) {
-    if (marketCap >= 1000000) score += 4;
-    else if (marketCap < 50000) score -= 3;
-  } else missing.push('market cap');
-
-  if ((market?.poolCount ?? 0) >= 3) {
-    score += 4;
-    reasons.push('Appears across multiple indexed pools.');
+  let score = 62;
+  const reasons = [];
+  if (verifiedMint) {
+    if (onchain.mintAuthority) { score -= 18; reasons.push('Mint authority is active (possible new supply).'); }
+    else { score += 8; reasons.push('Mint authority is revoked.'); }
+    if (onchain.freezeAuthority) { score -= 12; reasons.push('Freeze authority is active.'); }
+    else { score += 6; reasons.push('Freeze authority is revoked.'); }
+    const specialElevated = assessment.signals.filter(s => s.severity === 'elevated' &&
+      !['mint_authority', 'freeze_authority'].includes(s.id));
+    const specialAttention = assessment.signals.filter(s => s.severity === 'attention' && s.id !== 'low_liquidity');
+    if (specialElevated.length) { score -= Math.min(24, specialElevated.length * 12); reasons.push(`${specialElevated.length} elevated Token-2022 / control warning(s).`); }
+    if (specialAttention.length) { score -= Math.min(12, specialAttention.length * 4); reasons.push(`${specialAttention.length} additional smart-token warning(s).`); }
+  } else {
+    reasons.push('Only DEX measurements were available; mint and freeze controls remain unknown.');
   }
-  if ((market?.similar?.length ?? 0) >= 4) {
-    score -= 4;
-    reasons.push('Several similar-name listings found.');
-  }
-  if (concentration?.top10TokenAccountsPct != null) {
-    if (concentration.top10TokenAccountsPct >= 90) { score -= 10; reasons.push('Top token accounts are highly concentrated.'); }
-    else if (concentration.top10TokenAccountsPct >= 75) { score -= 5; reasons.push('Top token accounts hold a large share.'); }
-  } else missing.push('distribution / holder concentration');
 
-  missing.push('1D/3D/7D/30D trend windows', 'bundle / insider %');
-  score = clamp(Math.round(score), 8, 98);
+  if (pool) {
+    const liquidity = pool.liquidityUsd;
+    if (liquidity !== null) {
+      if (liquidity >= 100000) { score += 12; reasons.push('Indexed liquidity is at least $100K.'); }
+      else if (liquidity >= 25000) { score += 8; reasons.push('Indexed liquidity is at least $25K.'); }
+      else if (liquidity >= 5000) { score += 3; reasons.push('Indexed liquidity is at least $5K.'); }
+      else { score -= 8; reasons.push('Indexed liquidity below $5K can impair exits.'); }
+    }
+    const volume24 = pool.volume24hUsd;
+    if (volume24 !== null) {
+      if (volume24 >= 250000) { score += 10; reasons.push('Indexed 24H volume is at least $250K.'); }
+      else if (volume24 >= 50000) { score += 6; reasons.push('Indexed 24H volume is at least $50K.'); }
+      else if (volume24 >= 5000) { score += 2; reasons.push('Indexed 24H volume is at least $5K.'); }
+      else { score -= 6; reasons.push('Indexed 24H volume is below $5K.'); }
+    }
+    const marketCap = pool.marketCap ?? pool.fdv;
+    if (marketCap !== null) {
+      if (marketCap >= 1000000) score += 4;
+      else if (marketCap < 50000) score -= 3;
+    }
+    if (market.poolCount >= 3) { score += 4; reasons.push('Multiple indexed DEX pairs observed.'); }
+    if (coverage.similar && market.similar.length >= 4) { score -= 4; reasons.push('Several similar-name listings found (not proof of impersonation).'); }
+  } else {
+    reasons.push('No indexed DEX pair was available; liquidity and activity cannot be assessed.');
+  }
+  if (concentrationPresent) {
+    if (concentration.top10TokenAccountsPct >= 90) { score -= 10; reasons.push('Top token accounts hold at least 90% (includes LP and custody).'); }
+    else if (concentration.top10TokenAccountsPct >= 75) { score -= 5; reasons.push('Top token accounts hold at least 75% (includes LP and custody).'); }
+  }
+
+  // A market-only or chain-only result should not imply the token was fully screened.
+  score = clamp(Math.round(score), 8, verifiedMint && indexedPair ? 98 : 77);
   const grade = letterGrade(score);
-  let stance = 'CAUTION';
-  if (score >= 88) stance = 'LEGIT LEAN';
-  else if (score >= 72) stance = 'WATCHLIST';
-  else if (score >= 55) stance = 'HIGH RISK';
-  else stance = 'EXTREME RISK';
-
-  return {
-    score,
-    grade,
-    stance,
-    partial: !coverage.largestAccounts || !coverage.similar,
-    reasons: reasons.slice(0, 7),
-    unavailable: [...new Set(missing)],
-    formula: 'PROVISIONAL infrastructure indicator (not a safety certification). Starter grade built from on-chain authorities, Token-2022 controls, indexed liquidity, indexed volume, pool breadth, similar listings, and token-account concentration. It does not yet include insider %, bundle %, or full 1/3/7/30 day trend history.',
-  };
+  const stance = score >= 88 ? 'FAVORABLE SIGNALS' : score >= 72 ? 'MONITOR' : score >= 55 ? 'CAUTION' : 'ELEVATED RISK SIGNALS';
+  if (!verifiedMint || !indexedPair) reasons.push('One primary data source is missing; confidence is limited and the grade is capped at C+.');
+  return { ...common, score, grade, stance, reasons };
 }
 
 export async function scan(mint, deps = {}) {
@@ -348,7 +357,7 @@ export async function scan(mint, deps = {}) {
   }
   const assessment = classify(mint, onchain, market, largest, coverage);
   return {
-    version: '0.2.0', chain: 'solana', mint, checkedAt: new Date().toISOString(),
+    version: '2.0.0', chain: 'solana', mint, checkedAt: new Date().toISOString(),
     onchain, market, concentration: largest, coverage,
     assessment, categorization: categorize(onchain, market, assessment),
     grade: gradeToken(onchain, market, largest, assessment, coverage),

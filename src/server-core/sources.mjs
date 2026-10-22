@@ -1,5 +1,7 @@
 const env = typeof process !== 'undefined' ? process.env : {};
-const RPC_URL = env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
+// Dedicated RPC prevents public Solana endpoint rate limits that cause unknown mint controls.
+// Server environment variables only; never expose a provider key in VITE_* values.
+const RPC_URL = env.SOLANA_RPC_URL || (env.HELIUS_API_KEY ? `https://mainnet.helius-rpc.com/?api-key=${encodeURIComponent(env.HELIUS_API_KEY)}` : 'https://api.mainnet-beta.solana.com');
 const DEX_BASE = 'https://api.dexscreener.com';
 const TIMEOUT = Math.max(1500, Math.min(Number(env.UPSTREAM_TIMEOUT_MS) || 7000, 15000));
 

@@ -6,9 +6,9 @@ export const Route = createFileRoute('/')({
   head: () => ({
     meta: [
       { title: 'SCARECROW // Solana Signal Scanner' },
-      { name: 'description', content: 'Evidence-backed Solana token scanner with mint controls, indexed DEX data, and possible lookalike discovery.' },
+      { name: 'description', content: 'Scarecrow V2: confidence-labeled, evidence-based Solana token grades using available on-chain and DEX data.' },
       { property: 'og:title', content: 'SCARECROW // Solana Signal Scanner' },
-      { property: 'og:description', content: 'Feed it a mint. It watches the field. It grades the infrastructure.' },
+      { property: 'og:description', content: 'Feed it a mint. It watches the field. Now with evidence-based provisional grades and confidence labels.' },
     ],
   }),
   component: Index,
@@ -24,7 +24,7 @@ type ScanResponse = {
   concentration: null | { top10TokenAccountsPct: number; caveat: string }
   coverage: Record<string, boolean>
   assessment: { level: string; signals: Indicator[]; disclaimer: string }
-  grade: { grade: string | null; score: number | null; stance: string; reasons: string[]; unavailable: string[]; formula: string; partial: boolean }
+  grade: { grade: string; score: number | null; stance: string; confidence: 'HIGH' | 'MEDIUM' | 'LOW' | 'NONE'; coverageScore: number; basis: string; reasons: string[]; unavailable: string[]; formula: string; partial: boolean }
   sourceLinks: string[]
 }
 type Candidate = { mint: string; name: string; symbol: string; volume24hUsd: number | null; liquidityUsd: number | null; marketCap: number | null }
@@ -131,7 +131,7 @@ function Index() {
 
       <main className="relative z-10 mx-auto max-w-6xl px-4 py-12">
         <header className="mb-10 text-center">
-          <p className="text-xs tracking-[0.5em] text-accent glow-orange">// FIELD WATCH PROTOCOL v0.3 · SOLANA MAINNET</p>
+          <p className="text-xs tracking-[0.5em] text-accent glow-orange">// FIELD WATCH PROTOCOL v2.0 · SOLANA MAINNET</p>
           <h1 className="animate-flicker mt-3 font-display text-4xl font-black tracking-widest text-primary glow sm:text-5xl md:text-7xl">SCARECROW</h1>
           <p className="mt-3 text-sm text-muted-foreground">Feed it a coin. It watches the field. It grades the infrastructure.</p>
           <p className="mx-auto mt-2 max-w-2xl text-xs text-muted-foreground">Read-only screening · Live on-chain mint facts + indexed DEX data · No wallet required</p>
@@ -244,20 +244,27 @@ function Dashboard({ r }: { r: ScanResponse }) {
   return (
     <section className="mt-10 grid gap-4 md:grid-cols-3" aria-label="Solana token scan results">
       <div className="panel animate-rise flex min-w-0 flex-col items-center rounded-2xl p-6">
-        <p className="text-xs tracking-widest text-muted-foreground">HARVEST GRADE · PROVISIONAL</p>
+        <p className="text-xs tracking-widest text-muted-foreground">HARVEST GRADE · V2 PROVISIONAL</p>
         <div className="relative my-4 h-44 w-44">
           <svg viewBox="0 0 160 160" className="h-full w-full -rotate-90" aria-hidden="true">
             <circle cx="80" cy="80" r="70" fill="none" stroke="var(--muted)" strokeWidth="8" />
             <circle cx="80" cy="80" r="70" fill="none" stroke="currentColor" strokeWidth="8" strokeLinecap="round" className={color} strokeDasharray={circ} strokeDashoffset={circ * (1 - (score ?? 0) / 100)} style={{ transition: 'stroke-dashoffset 1.2s ease-out' }} />
           </svg>
           <div className="absolute inset-0 flex flex-col items-center justify-center">
-            <span className={`font-display text-5xl font-black ${color}`}>{r.grade?.grade || 'N/A'}</span>
-            <span className="text-xs text-muted-foreground">{score === null || score === undefined ? 'DATA MISSING' : `${score}/100`}</span>
+            <span className={`font-display text-5xl font-black ${color}`}>{r.grade.grade}</span>
+            <span className="text-xs text-muted-foreground">{score === null || score === undefined ? 'NO VERIFIED FEED' : `${score}/100`}</span>
           </div>
         </div>
         <p className="text-center text-xs text-accent">{r.market.name || 'UNNAMED TOKEN'} {r.market.symbol ? `· $${r.market.symbol}` : ''}</p>
+        <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
+          <span className={`rounded-full border px-3 py-1 text-[10px] font-bold tracking-widest ${r.grade.confidence === 'HIGH' ? 'border-primary/50 text-primary' : r.grade.confidence === 'MEDIUM' ? 'border-accent/50 text-accent' : 'border-destructive/50 text-destructive'}`}>
+            {r.grade.confidence} CONFIDENCE
+          </span>
+          <span className="rounded-full border border-primary/20 px-3 py-1 text-[10px] text-muted-foreground">{r.grade.basis}</span>
+        </div>
+        <p className="mt-2 text-center text-[10px] text-muted-foreground">{r.grade.stance} · {r.grade.coverageScore}% evidence coverage</p>
         <p className="mt-1 break-all text-center text-[10px] text-muted-foreground">{r.mint}</p>
-        <p className="mt-3 text-center text-[10px] leading-5 text-muted-foreground">{r.grade.partial ? 'PARTIAL COVERAGE · ' : ''}Infrastructure signals only — not a fraud verdict or safety guarantee.</p>
+        <p className="mt-3 text-center text-[10px] leading-5 text-muted-foreground">{r.grade.partial ? 'LIMITED EVIDENCE · ' : ''}{r.grade.grade === 'U' ? 'Feeds returned no verifiable observations; re-scan when data is available.' : 'Infrastructure grade, not a fraud verdict or safety guarantee.'}</p>
       </div>
 
       <div className="panel animate-rise min-w-0 rounded-2xl p-6 md:col-span-2" style={{ animationDelay: '.1s' }}>
@@ -335,16 +342,17 @@ function Dashboard({ r }: { r: ScanResponse }) {
         <p className="mb-3 text-xs tracking-widest text-muted-foreground">GRADE EXPLANATION & DATA COVERAGE</p>
         <div className="grid gap-4 md:grid-cols-2">
           <div>
-            <p className="mb-2 text-xs text-primary">INPUTS USED</p>
+            <p className="mb-2 text-xs text-primary">INPUTS USED · {r.grade.basis}</p>
             <ul className="space-y-2 text-xs text-muted-foreground">{r.grade.reasons.map((reason) => <li key={reason}>✓ {reason}</li>)}</ul>
             {r.concentration && <p className="mt-4 text-xs text-muted-foreground">Top 10 token accounts: {r.concentration.top10TokenAccountsPct}% · includes liquidity/custody accounts, not individual holders.</p>}
           </div>
           <div>
-            <p className="mb-2 text-xs text-accent">NOT YET VERIFIED</p>
+            <p className="mb-2 text-xs text-accent">MISSING / NOT YET VERIFIED</p>
             <ul className="space-y-2 text-xs text-muted-foreground">{r.grade.unavailable.map((missing) => <li key={missing}>— {missing}</li>)}</ul>
             <p className="mt-4 text-[10px] leading-5 text-muted-foreground">{r.grade.formula}</p>
           </div>
         </div>
+        <p className="mt-4 text-[10px] leading-5 text-accent">Confidence measures evidence coverage, not the probability that a coin is safe. A DEX-only grade does not verify mint or freeze controls.</p>
         <p className="mt-5 break-words text-[10px] leading-5 text-muted-foreground">Checked {new Date(r.checkedAt).toLocaleString()} · Sources: {r.sourceLinks.map((link) => <a key={link} className="mr-3 inline-block text-primary underline" href={link} target="_blank" rel="noopener noreferrer">{link.includes('solscan') ? 'SOLSCAN ↗' : 'DEX SCREENER ↗'}</a>)}</p>
       </div>
 

@@ -61,26 +61,30 @@ test('categorization labels are descriptive and are not scam conclusions',()=>{
  assert.doesNotMatch(s.labels.join(' '),/SCAM|FRAUD/);
 });
 
-test('does not issue A-to-F grade when an RPC outage leaves onchain data unavailable', async () => {
+test('if all feeds fail, returns U rather than fabricating an A-F grade', async () => {
  const r = await scan(MINT, {
    getMintAccount: async () => { throw Error('RPC down'); },
    getMarketPairs: async () => [],
    searchSimilarTokens: async () => [],
    getLargestTokenAccounts: async () => [],
  });
- assert.equal(r.grade.grade, null);
+ assert.equal(r.grade.grade, 'U');
  assert.equal(r.grade.score, null);
- assert.equal(r.grade.stance, 'UNRATED');
+ assert.equal(r.grade.stance, 'FEEDS UNAVAILABLE');
+ assert.equal(r.grade.confidence, 'NONE');
 });
 
-test('does not issue an infrastructure grade without a DEX trading pair', async () => {
+test('issues an onchain-only capped grade when a DEX pair is unavailable', async () => {
  const r = await scan(MINT, {
    getMintAccount: async () => ({ owner: SPL, data: { parsed: { type:'mint', info: { mintAuthority: null, freezeAuthority: null, supply: '100000000', decimals: 6 } } } }),
    getMarketPairs: async () => [],
    searchSimilarTokens: async () => [],
    getLargestTokenAccounts: async () => [{amount:'10000000'}],
  });
- assert.equal(r.grade.grade, null);
+ assert.ok(r.grade.grade !== 'U');
+ assert.ok(r.grade.score > 0 && r.grade.score <= 77);
+ assert.equal(r.grade.confidence, 'LOW');
+ assert.equal(r.grade.basis, 'ON-CHAIN ONLY');
 });
 
 test('issues provisional infrastructure grade when mint and market data exist', async () => {
@@ -99,4 +103,48 @@ test('issues provisional infrastructure grade when mint and market data exist', 
  assert.ok(r.grade.grade);
  assert.equal(r.market.primaryPool.volume1hUsd,12000);
  assert.equal(r.market.primaryPool.volume6hUsd,45000);
+});
+
+test('market-only scan retains provisional grade and does not assume revoked authorities', async () => {
+ const pair = {
+  chainId:'solana',dexId:'raydium',pairAddress:OTHER,
+  baseToken:{address:MINT,name:'Crow',symbol:'CROW'},quoteToken:{address:OTHER,name:'Wrapped SOL',symbol:'SOL'},
+  liquidity:{usd:33428},volume:{h24:3051},marketCap:153095,
+ };
+ const r = await scan(MINT, {
+  getMintAccount: async () => { throw Error('RPC rate limited'); },
+  getMarketPairs: async () => [pair],
+  searchSimilarTokens: async () => [],
+  getLargestTokenAccounts: async () => [],
+ });
+ assert.equal(r.coverage.onchain,false);
+ assert.equal(r.grade.basis,'DEX ONLY');
+ assert.equal(r.grade.confidence,'LOW');
+ assert.ok(r.grade.score > 0 && r.grade.score <= 77);
+ assert.ok(r.grade.grade !== 'U');
+ assert.ok(r.grade.unavailable.some(m => m.includes('mint controls')));
+ assert.ok(r.grade.reasons.some(m => m.includes('remain unknown')));
+});
+
+test('verified invalid mint produces F- NOT A TOKEN, not a normal positive grade', async () => {
+ const r = await scan(MINT, {
+  getMintAccount: async () => null,
+  getMarketPairs: async () => [],
+  searchSimilarTokens: async () => [],
+  getLargestTokenAccounts: async () => [],
+ });
+ assert.equal(r.grade.grade,'F-');
+ assert.equal(r.grade.score,0);
+ assert.equal(r.grade.stance,'NOT A TOKEN');
+});
+
+test('confirmed risky mint controls worsen a grade compared to revoked controls, all else equal', async () => {
+ const pair = {chainId:'solana',dexId:'raydium',baseToken:{address:MINT,symbol:'TEST',name:'Test'},quoteToken:{address:OTHER,symbol:'SOL',name:'SOL'},liquidity:{usd:80000},volume:{h24:40000},marketCap:300000};
+ const deps = {getMarketPairs:async()=>[pair],searchSimilarTokens:async()=>[],getLargestTokenAccounts:async()=>[{amount:'100'}]};
+ const account = (mintAuthority,freezeAuthority) => ({owner:SPL,data:{parsed:{type:'mint',info:{mintAuthority,freezeAuthority,supply:'1000000000',decimals:6}}}});
+ const good = await scan(MINT,{...deps,getMintAccount:async()=>account(null,null)});
+ const risky = await scan(MINT,{...deps,getMintAccount:async()=>account(OTHER,OTHER)});
+ assert.ok(risky.grade.score < good.grade.score);
+ assert.equal(good.grade.basis,'ON-CHAIN + DEX');
+ assert.equal(good.grade.confidence,'HIGH');
 });

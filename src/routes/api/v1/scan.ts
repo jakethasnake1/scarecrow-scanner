@@ -24,9 +24,11 @@ export const Route = createFileRoute('/api/v1/scan')({
             work = scan(mint)
             pending.set(mint, work)
           }
-          const value = await work
+          const value = await work as { grade?: { grade?: string; confidence?: string } }
           pending.delete(mint)
-          cache.set(mint, { until: Date.now() + 90_000, value })
+          // Retry transient upstream failures sooner without hammering providers.
+          const ttl = value.grade?.grade === 'U' ? 15_000 : value.grade?.confidence === 'LOW' ? 30_000 : 90_000
+          cache.set(mint, { until: Date.now() + ttl, value })
           if (cache.size > 300) cache.clear()
           return Response.json(value)
         } catch (error) {

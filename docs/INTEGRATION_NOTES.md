@@ -4,11 +4,11 @@
 
 **Architecture:** TanStack Start API routes (`/api/v1/scan`, `/api/v1/search`) import the open-source read-only Solana token screening code from `src/server-core`. Frontend uses relative URLs; no separate service is required during `npm run dev`.
 
-**Runtime:** `fetch` and `AbortController` are needed server-side; default RPC is Solana's public mainnet-beta endpoint and DEX data comes from DEX Screener. Rate limits, CORS, provider failures, empty/unindexed tokens, and Node/Cloudflare `process.env` handling require production testing. Use a server-side RPC secret if needed.
+**Runtime:** `fetch` and `AbortController` are needed server-side; default RPC is Solana's public mainnet-beta endpoint and DEX data comes from DEX Screener. Rate limits, CORS, provider failures, empty/unindexed tokens, and Node/Cloudflare `process.env` handling require production testing. For fewer public RPC rate limits, set `SOLANA_RPC_URL` or server-only `HELIUS_API_KEY` (never a `VITE_*` secret).
 
 **Token authenticity:** Search candidate order uses observed volume; never call a candidate official or original without independent confirmation. A possible duplicate is simply a lookalike with weak/ambiguous market indicators. Same tickers are common.
 
-**Grading:** The A+–F- formula is a provisional product heuristic, not a financial, investment or security audit. Null scores show N/A. Missing insider/bundle/history indicators are explicitly listed. A mint without both an on-chain verification and an indexed pair receives no letter grade. Do not quietly treat unavailable metrics as zero risk.
+**Grading (V2):** The A+–F- formula is an evidence-weighted provisional product heuristic, not a financial, investment, or security audit. A verified on-chain mint *or* an indexed DEX pair is sufficient to calculate an explicitly low-confidence, coverage-capped provisional grade. Missing insider/bundle/history indicators are listed. Neither source available results in `U / FEEDS UNAVAILABLE`, not a fabricated grade. Confirmed invalid mints show `F- / NOT A TOKEN`. Do not quietly treat unavailable metrics as zero risk.
 
 **Voting:** Browser-only localStorage prevents repeats only in the same browser. It is not one-person-one-vote and cannot support global public counts. Future persistent votes require user identity, a database, abuse controls, and moderation. Current reactions are individual annotations with no aggregated vote totals.
 
