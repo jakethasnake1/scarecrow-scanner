@@ -1,12 +1,13 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import scarecrow from '@/assets/scarecrow.jpg'
+import { CommunityBoard, postCommunity } from '@/components/CommunityBoard'
 
 export const Route = createFileRoute('/')({
   head: () => ({
     meta: [
       { title: 'SCARECROW // Solana Signal Scanner' },
-      { name: 'description', content: 'Scarecrow V2: confidence-labeled, evidence-based Solana token grades using available on-chain and DEX data.' },
+      { name: 'description', content: 'Scarecrow V4: holder-aware, age-aware, confidence-labeled, evidence-based Solana token grades using available on-chain and DEX data.' },
       { property: 'og:title', content: 'SCARECROW // Solana Signal Scanner' },
       { property: 'og:description', content: 'Feed it a mint. It watches the field. Now with evidence-based provisional grades and confidence labels.' },
     ],
@@ -22,6 +23,10 @@ type ScanResponse = {
   onchain: { exists: boolean | null; verified: boolean; reason?: string; program?: string; mintAuthority?: string | null; freezeAuthority?: string | null; decimals?: number; extensions?: { type: string }[] }
   market: { name: string | null; symbol: string | null; poolCount: number; similar: Similar[]; duplicateCaveat: string; primaryPool: null | { dex: string; liquidityUsd: number | null; volume24hUsd: number | null; volume6hUsd?: number | null; volume1hUsd?: number | null; marketCap?: number | null; fdv?: number | null; pairCreatedAt?: number | null; url: string } }
   concentration: null | { top10TokenAccountsPct: number; caveat: string }
+  holders: { holders: number | null; source: string | null; marketCapUsed: number | null; marketCapPerHolder: number | null; holdersPer100kCap: number | null; holderTop20Pct: number | null; holderTop1Pct: number | null; holderTop10Pct: number | null; caveat: string }
+  age: { createdAt: number | null; ageDays: number | null; ageSource: string | null; firstTradingAt: number | null; tradingDays: number | null; tradingAgeSource: string | null; caveat: string }
+  locks: { status: 'verified' | 'not_verified'; lockedAmount: number | null; lockedPct: number | null; unlockAt: number | null; contracts: string[]; source: string | null }
+
   coverage: Record<string, boolean>
   assessment: { level: string; signals: Indicator[]; disclaimer: string }
   grade: { grade: string; score: number | null; stance: string; confidence: 'HIGH' | 'MEDIUM' | 'LOW' | 'NONE'; coverageScore: number; basis: string; reasons: string[]; unavailable: string[]; formula: string; partial: boolean }
@@ -34,6 +39,7 @@ const STEPS = [
   'Planting sensors in the field…',
   'Reading live Solana mint controls…',
   'Interrogating indexed DEX pairs…',
+  'Checking holders, age and token locks…',
   'Cross-checking similar-name listings…',
   'Calculating the provisional grade…',
 ]
@@ -42,6 +48,9 @@ const VOTE_KEY = 'scarecrow_lovable_my_reactions_v1'
 const CROW_MINT = 'GtV6g1ey2NERrcbvL5bdzrxRJQDfxpMaLU9oLtRipump'
 const SOL_MINT = 'So11111111111111111111111111111111111111112'
 const isAddressShape = (value: string) => /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(value)
+const compact = (value: number | null | undefined) => value == null || !Number.isFinite(value) ? 'UNAVAILABLE' : new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 }).format(value)
+const days = (value: number | null | undefined) => value == null ? 'UNAVAILABLE' : `${new Intl.NumberFormat('en-US').format(value)} DAYS`
+const when = (value: number | null | undefined) => value == null ? 'UNKNOWN' : new Date(value).toLocaleDateString()
 const money = (n: number | null | undefined) => typeof n === 'number' && Number.isFinite(n) ? `$${new Intl.NumberFormat('en-US', { notation: Math.abs(n) >= 1000000 ? 'compact' : 'standard', maximumFractionDigits: Math.abs(n) >= 10000 ? 0 : 2 }).format(n)}` : 'UNAVAILABLE'
 const short = (mint: string) => `${mint.slice(0, 7)}…${mint.slice(-6)}`
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -131,8 +140,8 @@ function Index() {
 
       <main className="relative z-10 mx-auto max-w-6xl px-4 py-12">
         <header className="mb-10 text-center">
-          <p className="text-xs tracking-[0.5em] text-accent glow-orange">// FIELD WATCH PROTOCOL v2.0 · SOLANA MAINNET</p>
-          <h1 className="animate-flicker mt-3 font-display text-4xl font-black tracking-widest text-primary glow sm:text-5xl md:text-7xl">SCARECROW</h1>
+          <p className="text-xs tracking-[0.5em] text-accent glow-orange">// FIELD WATCH PROTOCOL v4.0 · SOLANA MAINNET</p>
+          <div className="mt-3 flex items-center justify-center gap-3 sm:gap-5"><img src="/wheat-emblem.png" alt="SCARECROW wheat emblem" className="h-12 w-12 shrink-0 object-contain sm:h-16 sm:w-16" /><h1 className="animate-flicker font-display text-3xl font-black tracking-widest text-primary glow sm:text-5xl md:text-7xl">SCARECROW</h1></div>
           <p className="mt-3 text-sm text-muted-foreground">Feed it a coin. It watches the field. It grades the infrastructure.</p>
           <p className="mx-auto mt-2 max-w-2xl text-xs text-muted-foreground">Read-only screening · Live on-chain mint facts + indexed DEX data · No wallet required</p>
         </header>
@@ -158,6 +167,8 @@ function Index() {
             </div>
           </div>
         )}
+
+        <CommunityBoard onScan={(mint) => { setInput(mint); void scanMint(mint) }} />
 
         {matches.length > 0 && (
           <section className="panel mx-auto mt-8 max-w-3xl rounded-2xl p-5">
@@ -190,33 +201,82 @@ function Index() {
   )
 }
 
-function getLocalVote(mint: string): 'legit' | 'concern' | null {
+function getPreviousBrowserVote(mint: string): string | null {
   try {
     const record = JSON.parse(localStorage.getItem(VOTE_KEY) || '{}') as Record<string, string>
-    return record[mint] === 'legit' || record[mint] === 'concern' ? record[mint] as 'legit' | 'concern' : null
+    return record[mint] === 'legit' || record[mint] === 'concern' ? record[mint] : null
   } catch { return null }
 }
 
-function Reactions({ mint }: { mint: string }) {
-  const [selection, setSelection] = useState<'legit' | 'concern' | null>(null)
-  useEffect(() => setSelection(getLocalVote(mint)), [mint])
-  function vote(choice: 'legit' | 'concern') {
-    if (getLocalVote(mint)) return
-    try {
-      const record = JSON.parse(localStorage.getItem(VOTE_KEY) || '{}') as Record<string, string>
-      record[mint] = choice
-      localStorage.setItem(VOTE_KEY, JSON.stringify(record))
-      setSelection(choice)
-    } catch { /* disabled if browser storage blocked */ }
+type CommunityVotes = { legit: number; concern: number; total: number; myVote: 'legit' | 'concern' | null }
+
+function Reactions({ mint, tokenLabel }: { mint: string; tokenLabel: string }) {
+  const [votes, setVotes] = useState<CommunityVotes | null>(null)
+  const [available, setAvailable] = useState(true)
+  const [writeEnabled, setWriteEnabled] = useState<boolean | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [feedback, setFeedback] = useState('')
+  const [submission, setSubmission] = useState('')
+  const [previous, setPrevious] = useState<string | null>(null)
+
+  useEffect(() => { setPrevious(getPreviousBrowserVote(mint)) }, [mint])
+  useEffect(() => {
+    let open = true
+    setVotes(null)
+    setWriteEnabled(null)
+    setFeedback('')
+    fetch(`/api/v1/community/?mint=${encodeURIComponent(mint)}`, { cache: 'no-store' })
+      .then(async (response) => { if (!response.ok) throw new Error('offline'); return response.json() })
+      .then((data) => { if (open) { setVotes(data.votes as CommunityVotes); setAvailable(true); setWriteEnabled(!!data.writeEnabled) } })
+      .catch(() => { if (open) setAvailable(false) })
+    return () => { open = false }
+  }, [mint])
+
+  async function refreshVotes() {
+    const response = await fetch(`/api/v1/community/?mint=${encodeURIComponent(mint)}`, { cache: 'no-store' })
+    if (response.ok) { const data = await response.json(); setVotes(data.votes as CommunityVotes); setAvailable(true); setWriteEnabled(!!data.writeEnabled) }
   }
+
+  async function vote(choice: 'legit' | 'concern') {
+    if (busy || votes?.myVote || !available || !writeEnabled) return
+    setBusy(true); setFeedback('')
+    try {
+      const result = await postCommunity('vote', { mint, choice })
+      setFeedback(result.recorded ? 'Reaction saved to the community database.' : 'Your browser already reacted to this token.')
+      try { await refreshVotes() } catch { setFeedback('Saved. Refresh to see the latest total.') }
+    } catch (e) { setFeedback(e instanceof Error ? e.message : 'Could not save reaction') }
+    finally { setBusy(false) }
+  }
+
+  async function submit() {
+    if (busy || !available || !writeEnabled) return
+    setBusy(true); setSubmission('')
+    try {
+      const result = await postCommunity('submit', { mint, label: tokenLabel })
+      setSubmission(result.recorded ? 'Token added to the shared Field Board.' : 'This browser already submitted this token.')
+      window.dispatchEvent(new Event('scarecrow:community'))
+    } catch (e) { setSubmission(e instanceof Error ? e.message : 'Could not submit token') }
+    finally { setBusy(false) }
+  }
+
   return (
     <div className="panel animate-rise mt-4 rounded-2xl p-5 md:col-span-3">
-      <p className="mb-3 text-xs tracking-widest text-muted-foreground">CITIZEN SIGNAL · YOUR REACTION</p>
-      <div className="flex flex-wrap gap-3">
-        <button type="button" onClick={() => vote('legit')} disabled={selection !== null} className={`rounded-full border px-5 py-3 text-xs font-bold transition hover:box-glow active:scale-95 disabled:opacity-70 ${selection === 'legit' ? 'border-primary bg-primary/15 text-primary' : 'border-primary/30 text-foreground'}`}>👍 LEGIT</button>
-        <button type="button" onClick={() => vote('concern')} disabled={selection !== null} className={`rounded-full border px-5 py-3 text-xs font-bold transition hover:box-glow active:scale-95 disabled:opacity-70 ${selection === 'concern' ? 'border-destructive bg-destructive/15 text-destructive' : 'border-destructive/30 text-foreground'}`}>👎 SCAM CONCERN</button>
+      <p className="mb-3 text-xs tracking-widest text-muted-foreground">CITIZEN SIGNAL · SHARED COMMUNITY REACTIONS</p>
+      <div className="flex flex-wrap items-center gap-3">
+        <button type="button" onClick={() => void vote('legit')} disabled={busy || !available || !writeEnabled || !!votes?.myVote || !votes} className={`rounded-full border px-5 py-3 text-xs font-bold transition hover:box-glow disabled:opacity-60 ${votes?.myVote === 'legit' ? 'border-primary bg-primary/15 text-primary' : 'border-primary/40 text-foreground'}`}>👍 LEGIT · {votes?.legit ?? '–'}</button>
+        <button type="button" onClick={() => void vote('concern')} disabled={busy || !available || !writeEnabled || !!votes?.myVote || !votes} className={`rounded-full border px-5 py-3 text-xs font-bold transition hover:box-glow disabled:opacity-60 ${votes?.myVote === 'concern' ? 'border-destructive bg-destructive/15 text-destructive' : 'border-destructive/40 text-foreground'}`}>👎 CONCERN · {votes?.concern ?? '–'}</button>
+        <span className="text-xs text-accent">{votes ? `${votes.total} ANONYMOUS REACTIONS` : available ? 'LOADING…' : 'FIELD SIGNAL OFFLINE'}</span>
       </div>
-      <p className="mt-3 text-xs leading-5 text-muted-foreground">{selection ? `Saved on this browser: ${selection === 'legit' ? 'Legit' : 'Scam concern'}.` : 'Choose one reaction per token on this browser.'} These reactions are local-only and do not represent public consensus. Shared one-person-one-vote requires authentication and a database.</p>
+      <p className="mt-3 text-xs leading-5 text-muted-foreground">{votes?.myVote ? `Your browser voted: ${votes.myVote === 'legit' ? 'Legit' : 'Concern'}. ` : ''}These votes are stored on the server and shared across visitors. One reaction per mint per signed browser session, not one verified human. Votes are opinions, never proof of legitimacy.</p>
+      {previous && !votes?.myVote && <p className="mt-2 text-xs text-accent">Your V2 reaction was saved on this browser only and was not transferred to the shared database. You can vote again.</p>}
+      {(!available || writeEnabled === false) && <p className="mt-2 text-xs text-accent">Community posting is not configured or is temporarily unavailable. Scanning still works.</p>}
+      {feedback && <p role="status" className="mt-2 text-xs text-accent">{feedback}</p>}
+      <div className="mt-5 border-t border-primary/20 pt-5">
+        <p className="mb-3 text-xs tracking-widest text-muted-foreground">SUBMIT THIS TOKEN TO THE COMMUNITY</p>
+        <button type="button" onClick={() => void submit()} disabled={busy || !available || !writeEnabled || !votes} className="rounded-full border border-primary/60 bg-primary/10 px-5 py-3 text-xs font-bold text-primary disabled:opacity-40">ADD TO FIELD BOARD ↗</button>
+        <p className="mt-2 text-[10px] leading-5 text-muted-foreground">Opt-in, publicly visible token mint submission. Search activity is not published automatically. Token identity and labels are not verified.</p>
+        {submission && <p role="status" className="mt-2 text-xs text-accent">{submission}</p>}
+      </div>
     </div>
   )
 }
@@ -232,6 +292,8 @@ function Dashboard({ r }: { r: ScanResponse }) {
     { label: 'FREEZE CONTROLS', value: !valid ? null : r.onchain.freezeAuthority ? 25 : 100, annotation: !valid ? 'Unknown' : r.onchain.freezeAuthority ? 'Authority active' : 'Authority revoked' },
     { label: 'INDEXED LIQUIDITY', value: pool?.liquidityUsd === null || pool?.liquidityUsd === undefined ? null : Math.max(0, Math.min(100, Math.round(pool.liquidityUsd / 100000 * 100))), annotation: money(pool?.liquidityUsd) },
     { label: '24H MARKET ACTIVITY', value: pool?.volume24hUsd === null || pool?.volume24hUsd === undefined ? null : Math.max(0, Math.min(100, Math.round(pool.volume24hUsd / 250000 * 100))), annotation: money(pool?.volume24hUsd) },
+    { label: 'HOLDER PARTICIPATION', value: r.holders?.holders == null ? null : Math.max(0, Math.min(100, Math.round(r.holders.holders / 1000 * 100))), annotation: r.holders?.holders == null ? 'Holder feed unavailable' : `${compact(r.holders.holders)} observed holders` },
+    { label: 'INDEXED TRADING HISTORY', value: r.age?.tradingDays == null ? null : Math.max(0, Math.min(100, Math.round(r.age.tradingDays / 90 * 100))), annotation: days(r.age?.tradingDays) },
     { label: 'DEX PAIR BREADTH', value: r.coverage.market ? Math.min(100, r.market.poolCount * 20) : null, annotation: `${r.market.poolCount ?? 0} indexed pairs` },
   ]
   const volumes: { label: string; value: number | null | undefined }[] = [
@@ -244,7 +306,7 @@ function Dashboard({ r }: { r: ScanResponse }) {
   return (
     <section className="mt-10 grid gap-4 md:grid-cols-3" aria-label="Solana token scan results">
       <div className="panel animate-rise flex min-w-0 flex-col items-center rounded-2xl p-6">
-        <p className="text-xs tracking-widest text-muted-foreground">HARVEST GRADE · V2 PROVISIONAL</p>
+        <p className="text-xs tracking-widest text-muted-foreground">HARVEST GRADE · V4 EVIDENCE-WEIGHTED</p>
         <div className="relative my-4 h-44 w-44">
           <svg viewBox="0 0 160 160" className="h-full w-full -rotate-90" aria-hidden="true">
             <circle cx="80" cy="80" r="70" fill="none" stroke="var(--muted)" strokeWidth="8" />
@@ -286,12 +348,34 @@ function Dashboard({ r }: { r: ScanResponse }) {
         { label: 'DEX LIQUIDITY', value: money(pool?.liquidityUsd) },
         { label: '24H VOLUME', value: money(pool?.volume24hUsd) },
         { label: 'MARKET CAP / FDV (DEX)', value: money(pool?.marketCap ?? pool?.fdv) },
+        { label: 'TOKEN HOLDERS · INDEXED', value: compact(r.holders?.holders) },
+        { label: 'MARKET CAP ÷ HOLDER', value: money(r.holders?.marketCapPerHolder) },
+        { label: 'HOLDERS PER $100K MARKET CAP', value: compact(r.holders?.holdersPer100kCap) },
+        { label: 'TOKEN AGE · FIRST MINT/CREATION', value: days(r.age?.ageDays) },
+        { label: 'INDEXED TRADING AGE', value: days(r.age?.tradingDays) },
+        { label: 'STREAMFLOW LOCKED SUPPLY', value: r.locks?.status === 'verified' && r.locks.lockedAmount != null ? compact(r.locks.lockedAmount) : 'NOT VERIFIED' },
       ].map((s, i) => (
         <div key={s.label} className="panel animate-rise min-w-0 rounded-2xl p-5" style={{ animationDelay: `${.2 + i * .05}s` }}>
           <p className="text-xs tracking-widest text-muted-foreground">{s.label}</p>
           <p className="mt-2 break-all font-display text-xl text-primary glow sm:text-2xl">{s.value}</p>
         </div>
       ))}
+
+      <div className="panel animate-rise min-w-0 rounded-2xl p-6 md:col-span-3">
+        <p className="mb-3 text-xs tracking-widest text-muted-foreground">DISTRIBUTION & LOCK VERIFICATION</p>
+        <div className="grid gap-3 text-xs leading-6 md:grid-cols-2">
+          <div><p className="text-primary">HOLDER DENSITY · {r.holders?.holdersPer100kCap == null ? 'UNAVAILABLE' : `${compact(r.holders.holdersPer100kCap)} / $100K CAP`}</p>
+            <p className="mt-1 text-muted-foreground">{r.holders?.caveat || 'Not verified.'} This ratio does not measure whether holders are accumulating or holding longer.</p>
+            {r.holders?.holderTop20Pct != null && <p className="mt-2 text-accent">Top 20 holder-address share: {compact(r.holders.holderTop20Pct)}% (may include LP/custody).</p>}
+            {r.holders?.holderTop10Pct != null && <p className="mt-2 text-accent">GeckoTerminal top 10 address share: {compact(r.holders.holderTop10Pct)}%.</p>}
+            <p className="mt-2 text-muted-foreground">Provider: {r.holders?.source || 'no holder provider returned data'}.</p></div>
+          <div><p className="text-primary">LOCKED SUPPLY · {r.locks?.status === 'verified' ? 'CONTRACT VERIFIED' : 'NOT VERIFIED'}</p>
+            <p className="mt-1 text-muted-foreground">A labeled Streamflow holder account does not prove a noncancelable lock. Credit requires checking the contract, release date, token and currently inaccessible amount. No manual claims affect the score.</p>
+            {r.locks?.status === 'verified' && <p className="mt-2 text-accent">Earliest observed unlock: {when(r.locks.unlockAt)}</p>}
+            <a className="mt-2 inline-block text-primary underline" href="https://app.streamflow.finance/" target="_blank" rel="noopener noreferrer">Verify token contracts on Streamflow ↗</a></div>
+        </div>
+        <p className="mt-3 text-[10px] text-muted-foreground">TOKEN AGE: {when(r.age?.createdAt)} ({r.age?.ageSource || 'not observed'}). TRADING AGE: {when(r.age?.firstTradingAt)} ({r.age?.tradingAgeSource || 'not observed'}). {r.age?.caveat}</p>
+      </div>
 
       <div className="panel animate-rise min-w-0 rounded-2xl p-6 md:col-span-2" style={{ animationDelay: '.4s' }}>
         <p className="mb-4 text-xs tracking-widest text-muted-foreground">INDEXED VOLUME WINDOWS · 1H / 6H / 24H</p>
@@ -353,10 +437,10 @@ function Dashboard({ r }: { r: ScanResponse }) {
           </div>
         </div>
         <p className="mt-4 text-[10px] leading-5 text-accent">Confidence measures evidence coverage, not the probability that a coin is safe. A DEX-only grade does not verify mint or freeze controls.</p>
-        <p className="mt-5 break-words text-[10px] leading-5 text-muted-foreground">Checked {new Date(r.checkedAt).toLocaleString()} · Sources: {r.sourceLinks.map((link) => <a key={link} className="mr-3 inline-block text-primary underline" href={link} target="_blank" rel="noopener noreferrer">{link.includes('solscan') ? 'SOLSCAN ↗' : 'DEX SCREENER ↗'}</a>)}</p>
+        <p className="mt-5 break-words text-[10px] leading-5 text-muted-foreground">Checked {new Date(r.checkedAt).toLocaleString()} · Sources: {r.sourceLinks.map((link) => <a key={link} className="mr-3 inline-block text-primary underline" href={link} target="_blank" rel="noopener noreferrer">{link.includes('solscan') ? 'SOLSCAN ↗' : link.includes('geckoterminal') ? 'GECKOTERMINAL ↗' : link.includes('streamflow') ? 'STREAMFLOW ↗' : 'DEX SCREENER ↗'}</a>)}</p>
       </div>
 
-      <Reactions mint={r.mint} />
+      <Reactions mint={r.mint} tokenLabel={r.market.symbol ? `$${r.market.symbol}` : ''} />
       <p className="text-center text-[10px] leading-6 text-muted-foreground md:col-span-3">Data is read-only and partially indexed. A higher grade, higher trading volume, or a community reaction cannot verify that a token is legitimate. Scarecrow does not request wallet access.</p>
     </section>
   )

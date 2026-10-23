@@ -12,7 +12,8 @@
     "format": "prettier --write .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:scanner": "node --test tests/scanner.test.mjs"
+    "test:scanner": "node --test tests/scanner.test.mjs",
+    "test:community": "node --test tests/community.test.mjs"
   },
   "overrides": {
     "rolldown": "1.2.1"

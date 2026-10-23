@@ -56,3 +56,42 @@ export async function searchSimilarTokens(text) {
   const data = await fetchJson(`${DEX_BASE}/latest/dex/search?q=${encodeURIComponent(text)}`);
   return Array.isArray(data?.pairs) ? data.pairs.filter(p => p.chainId === 'solana').slice(0, 100) : [];
 }
+
+// Solscan Pro endpoints are authenticated; scraping Solscan pages is not reliable.
+// An absent key is a normal outcome and MUST NOT be interpreted as zero holders.
+const solscanCache = new Map();
+export async function getSolscanIntel(mint) {
+  const key = typeof process !== 'undefined' ? process.env.SOLSCAN_API_KEY : undefined;
+  if (!key) return null;
+  const cached = solscanCache.get(mint);
+  if (cached && cached.expires > Date.now()) return cached.data;
+  const headers = { 'token': key };
+  const paths = ['token/meta', 'token/statistic'];
+  const results = await Promise.allSettled(paths.map(path =>
+    fetchJson(`https://pro-api.solscan.io/v2.0/${path}?address=${encodeURIComponent(mint)}`, { headers })
+  ));
+  if (results.every(r => r.status === 'rejected')) throw new Error('solscan_api_unavailable');
+  const data = {
+    profile: results[0].status === 'fulfilled' && results[0].value?.success ? results[0].value : null,
+    statistics: results[1].status === 'fulfilled' && results[1].value?.success ? results[1].value : null,
+  };
+  solscanCache.set(mint, { data, expires: Date.now() + 10 * 60_000 });
+  if (solscanCache.size > 200) solscanCache.clear();
+  return data;
+}
+
+// Public GeckoTerminal holder snapshot. Free API has a ~30 requests/minute limit.
+// Keep a per-isolate cache to avoid charging a new request for every repeated scan.
+const geckoCache = new Map();
+export async function getGeckoIntel(mint) {
+  const cached = geckoCache.get(mint);
+  if (cached && cached.expires > Date.now()) return cached.data;
+  try {
+    const data = await fetchJson(`https://api.geckoterminal.com/api/v2/networks/solana/tokens/${encodeURIComponent(mint)}/info`);
+    const attributes = data?.data?.attributes;
+    if (!attributes || data.data.id && !String(data.data.id).endsWith(`_${mint}`)) return null;
+    geckoCache.set(mint, { data: attributes, expires: Date.now() + 5 * 60_000 });
+    if (geckoCache.size > 200) geckoCache.clear();
+    return attributes;
+  } catch { return null; }
+}

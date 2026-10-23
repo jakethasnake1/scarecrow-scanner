@@ -1,0 +1,30 @@
+import { createFileRoute } from '@tanstack/react-router'
+// @ts-expect-error Server-only JS library.
+import { addSuggestion, validateSuggestion } from '../../../../server-core/community.mjs'
+// @ts-expect-error Worker-specific loader.
+import { bindings } from '../../../../server-core/community-runtime.mjs'
+// @ts-expect-error Server-side anonymous session helpers.
+import { anonymousVisitor, limitedJson, mutationAllowed, reply } from '../../../../server-core/community-auth.mjs'
+
+export const Route = createFileRoute('/api/v1/community/suggest')({
+  server: { handlers: {
+    POST: async ({ request }) => {
+      if (!mutationAllowed(request)) return reply({ error: 'Same-origin JSON request required' }, 403)
+      const { db, secret } = await bindings()
+      if (!db || !secret || secret.length < 32) return reply({ error: 'Suggestion box is not configured yet' }, 503)
+      try {
+        const data = await limitedJson(request)
+        const { kind, message } = validateSuggestion(data.kind, data.message)
+        const visitor = await anonymousVisitor(request, secret, true)
+        const result = await addSuggestion(db, kind, message, visitor.hash)
+        return reply(result, 201, visitor.setCookie)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Suggestion unavailable'
+        if (message.includes('Daily')) return reply({ error: message }, 429)
+        if (/^(Suggestion|Choose|Describe|Invalid|Payload|Missing)/.test(message)) return reply({ error: message }, 400)
+        console.error('Community suggestion failed', message)
+        return reply({ error: 'Suggestion could not be saved' }, 503)
+      }
+    },
+  } },
+})
