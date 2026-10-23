@@ -1,6 +1,6 @@
 import { isSolanaAddress } from './validation.mjs';
-import { getMintAccount, getLargestTokenAccounts, getMarketPairs, searchSimilarTokens, TOKEN_PROGRAM, TOKEN_2022_PROGRAM, getSolscanIntel, getGeckoIntel } from './sources.mjs';
-import { interpretSolscanData, interpretGeckoData, tokenAgeMetrics, holderMetrics, validateVerifiedLocks } from './market-intel.mjs';
+import { getMintAccount, getLargestTokenAccounts, getMarketPairs, searchSimilarTokens, TOKEN_PROGRAM, TOKEN_2022_PROGRAM, getSolscanIntel, getGeckoIntel, getRugcheckIntel } from './sources.mjs';
+import { interpretSolscanData, interpretGeckoData, tokenAgeMetrics, holderMetrics, validateVerifiedLocks, interpretRugcheckData } from './market-intel.mjs';
 
 const solscan = (mint) => `https://solscan.io/token/${mint}`;
 const normalize = (v) => String(v ?? '').trim().toLowerCase().replace(/\s+/g,' ');
@@ -227,7 +227,7 @@ function letterGrade(score) {
   return bands.find(([min]) => score >= min)?.[1] || 'F-';
 }
 
-export function gradeToken(onchain, market, concentration, assessment, coverage, holders = null, age = null, locks = null) {
+export function gradeToken(onchain, market, concentration, assessment, coverage, holders = null, age = null, locks = null, indexedControls = null) {
   // An evidence-based grade is always attempted if at least one meaningful
   // observation exists. Missing feeds reduce confidence, not actual risk.
   const verifiedMint = coverage.onchain === true && onchain?.verified === true && onchain?.exists === true;
@@ -255,7 +255,7 @@ export function gradeToken(onchain, market, concentration, assessment, coverage,
   if (!capPresent) unavailable.push('indexed market capitalization / FDV');
   if (!concentrationPresent) unavailable.push('top token-account concentration');
   if (!coverage.similar) unavailable.push('similar-name search coverage');
-  if (holders?.holders == null) unavailable.push('token holder count (GeckoTerminal unavailable; optional SOLSCAN_API_KEY)');
+  if (holders?.holders == null) unavailable.push('token holder count (GeckoTerminal / RugCheck; optionally Solscan API key)');
   if (age?.createdAt == null) unavailable.push('token creation timestamp (Solscan metadata)');
   if (age?.firstTradingAt == null) unavailable.push('indexed first trading/listing timestamp');
   if (locks?.status !== 'verified') unavailable.push('on-chain verified Streamflow lock contracts and release schedule');
@@ -266,7 +266,7 @@ export function gradeToken(onchain, market, concentration, assessment, coverage,
     basis,
     partial: coverageScore < 100,
     unavailable,
-    formula: 'V4 EVIDENCE-WEIGHTED infrastructure indicator. Grades use observed mint controls, DEX measurements, indexed age and indexed holder statistics (GeckoTerminal or Solscan). Missing measurements reduce confidence and limit the maximum grade; they are not treated as confirmed misconduct. This does NOT determine legitimacy, ownership, insider activity, or investment safety.',
+    formula: 'V4.1 EVIDENCE-WEIGHTED infrastructure indicator. Grades use observed mint controls, DEX measurements, indexed age and indexed holder statistics (GeckoTerminal or Solscan). Missing measurements reduce confidence and limit the maximum grade; they are not treated as confirmed misconduct. This does NOT determine legitimacy, ownership, insider activity, or investment safety.',
   };
   if (confirmedInvalid) {
     return {
@@ -295,7 +295,13 @@ export function gradeToken(onchain, market, concentration, assessment, coverage,
     if (specialElevated.length) { score -= Math.min(24, specialElevated.length * 12); reasons.push(`${specialElevated.length} elevated Token-2022 / control warning(s).`); }
     if (specialAttention.length) { score -= Math.min(12, specialAttention.length * 4); reasons.push(`${specialAttention.length} additional smart-token warning(s).`); }
   } else {
-    reasons.push('Only DEX measurements were available; mint and freeze controls remain unknown.');
+    if (indexedControls?.controlsAvailable) {
+      // Smaller, independent-indexer credit; never equivalent to a direct RPC response.
+      if (indexedControls.indexedMintAuthority) { score -= 14; reasons.push('RugCheck index reports mint authority active; direct RPC unavailable.'); }
+      else { score += 4; reasons.push('RugCheck index reports no mint authority; direct RPC not verified.'); }
+      if (indexedControls.indexedFreezeAuthority) { score -= 10; reasons.push('RugCheck index reports freeze authority active; direct RPC unavailable.'); }
+      else { score += 3; reasons.push('RugCheck index reports no freeze authority; direct RPC not verified.'); }
+    } else reasons.push('Only DEX measurements were available; mint and freeze controls remain unknown.');
   }
 
   if (pool) {
@@ -305,6 +311,14 @@ export function gradeToken(onchain, market, concentration, assessment, coverage,
       else if (liquidity >= 25000) { score += 8; reasons.push('Indexed liquidity is at least $25K.'); }
       else if (liquidity >= 5000) { score += 3; reasons.push('Indexed liquidity is at least $5K.'); }
       else { score -= 8; reasons.push('Indexed liquidity below $5K can impair exits.'); }
+    }
+    // Relative liquidity matters for smaller markets. Bound the boost so a
+    // tiny pool or distorted cap cannot substitute for absolute depth.
+    const capForRatio = pool.marketCap;
+    if (liquidity != null && capForRatio != null && capForRatio >= 100000 && liquidity >= 10000) {
+      const relativeLiquidity = liquidity / capForRatio;
+      if (relativeLiquidity >= 0.20) { score += 3; reasons.push('Indexed liquidity is at least 20% of observed market cap (relative depth).'); }
+      else if (relativeLiquidity >= 0.10) { score += 1; reasons.push('Indexed liquidity is at least 10% of observed market cap (relative depth).'); }
     }
     const volume24 = pool.volume24hUsd;
     if (volume24 !== null) {
@@ -363,18 +377,43 @@ export function gradeToken(onchain, market, concentration, assessment, coverage,
   return { ...common, score, grade, stance, reasons };
 }
 
+// Public provider diagnostics never include provider URLs with keys, request headers,
+// token values or raw exception messages; only a small allowlisted status vocabulary.
+function failureLabel(result) {
+  if (result.status === 'fulfilled') return result.value == null ? 'NO_DATA' : 'OK';
+  const message = String(result.reason?.message ?? '');
+  if (/upstream_http_401|upstream_http_403/.test(message)) return 'AUTH_OR_ACCESS_DENIED';
+  if (/upstream_http_429/.test(message)) return 'RATE_LIMITED';
+  if (/upstream_http_404/.test(message)) return 'NOT_INDEXED';
+  if (/upstream_http_5\d\d/.test(message)) return 'PROVIDER_ERROR';
+  if (/abort/i.test(message)) return 'TIMEOUT';
+  return 'UNAVAILABLE';
+}
+function buildSourceHealth(results, sources) {
+  return {
+    solanaRPC: failureLabel(results[0]),
+    dexscreener: failureLabel(results[1]),
+    solscan: sources.solscanConfigured ? failureLabel(results[2]) : 'NOT_CONFIGURED',
+    geckoterminal: failureLabel(results[4]),
+    rugcheck: failureLabel(results[5]),
+    streamflow: 'NOT_INTEGRATED',
+  };
+}
+
 export async function scan(mint, deps = {}) {
   if (!isSolanaAddress(mint)) throw Object.assign(new Error('Invalid Solana mint address'), { status: 400, code: 'invalid_mint' });
   const sources = {
     getMintAccount: deps.getMintAccount || getMintAccount,
+    solscanConfigured: deps.getSolscanIntel ? true : Boolean(typeof process !== 'undefined' && process.env?.SOLSCAN_API_KEY),
     getLargestTokenAccounts: deps.getLargestTokenAccounts || getLargestTokenAccounts,
     getMarketPairs: deps.getMarketPairs || getMarketPairs,
     searchSimilarTokens: deps.searchSimilarTokens || searchSimilarTokens,
     getSolscanIntel: deps.getSolscanIntel || getSolscanIntel,
     getGeckoIntel: deps.getGeckoIntel || (deps.getMarketPairs ? async () => null : getGeckoIntel),
+    getRugcheckIntel: deps.getRugcheckIntel || (deps.getMarketPairs ? async () => null : getRugcheckIntel),
     getVerifiedStreamflowLocks: deps.getVerifiedStreamflowLocks || (async () => null),
   };
-  const results = await Promise.allSettled([sources.getMintAccount(mint), sources.getMarketPairs(mint), sources.getSolscanIntel(mint), sources.getVerifiedStreamflowLocks(mint), sources.getGeckoIntel(mint)]);
+  const results = await Promise.allSettled([sources.getMintAccount(mint), sources.getMarketPairs(mint), sources.getSolscanIntel(mint), sources.getVerifiedStreamflowLocks(mint), sources.getGeckoIntel(mint), sources.getRugcheckIntel(mint)]);
   const account = results[0].status === 'fulfilled' ? results[0].value : null;
   const pairs = results[1].status === 'fulfilled' ? results[1].value : [];
   const onchain = results[0].status === 'fulfilled' ? interpretMint(account) : { exists: null, verified: false, reason: 'Solana RPC is currently unavailable.' };
@@ -394,20 +433,29 @@ export async function scan(mint, deps = {}) {
     largest = analyzeConcentration(onchain, extras[1].value);
   }
   const solscanIntel = results[2].status === 'fulfilled' && results[2].value
-    ? interpretSolscanData(results[2].value.profile, results[2].value.statistics) : null;
+    ? interpretSolscanData(results[2].value.profile, results[2].value.statistics, results[2].value.holderList) : null;
   const geckoIntel = results[4].status === 'fulfilled' && results[4].value ? interpretGeckoData(results[4].value) : null;
-  const holders = holderMetrics(solscanIntel, market, geckoIntel);
-  const age = tokenAgeMetrics(market, solscanIntel);
+  const rugcheckIntel = results[5].status === 'fulfilled' && results[5].value ? interpretRugcheckData(results[5].value, mint) : null;
+  const holders = holderMetrics(solscanIntel, market, geckoIntel, rugcheckIntel);
+  const age = tokenAgeMetrics(market, solscanIntel, Date.now(), rugcheckIntel);
   const locks = validateVerifiedLocks(results[3].status === 'fulfilled' ? results[3].value : null, mint);
   coverage.holders = holders.holders !== null;
   coverage.age = age.firstTradingAt !== null;
   coverage.streamflow = locks.status === 'verified';
   const assessment = classify(mint, onchain, market, largest, coverage);
   return {
-    version: '4.0.0', chain: 'solana', mint, checkedAt: new Date().toISOString(),
+    version: '4.1.0', chain: 'solana', mint, checkedAt: new Date().toISOString(),
     onchain, market, concentration: largest, holders, age, locks, coverage,
+    indexedControls: !onchain.verified && rugcheckIntel?.controlsAvailable ? { mintAuthority: rugcheckIntel.indexedMintAuthority, freezeAuthority: rugcheckIntel.indexedFreezeAuthority, source: 'RugCheck (third-party index)' } : null,
+    sourceHealth: (() => {
+      const health = buildSourceHealth(results, sources);
+      if (health.solscan === 'OK' && !solscanIntel?.holders && !solscanIntel?.createdAt) health.solscan = 'NO_HOLDER_OR_AGE_DATA';
+      if (health.geckoterminal === 'OK' && geckoIntel?.holders == null) health.geckoterminal = 'NO_HOLDER_COUNT';
+      if (health.rugcheck === 'OK' && rugcheckIntel?.holders == null) health.rugcheck = 'NO_HOLDER_COUNT';
+      return health;
+    })(),
     assessment, categorization: categorize(onchain, market, assessment),
-    grade: gradeToken(onchain, market, largest, assessment, coverage, holders, age, locks),
-    sourceLinks: [solscan(mint), `https://dexscreener.com/solana/${mint}`, `https://www.geckoterminal.com/solana/tokens/${mint}`, 'https://app.streamflow.finance/'],
+    grade: gradeToken(onchain, market, largest, assessment, coverage, holders, age, locks, !onchain.verified ? rugcheckIntel : null),
+    sourceLinks: [solscan(mint), `https://dexscreener.com/solana/${mint}`, `https://www.geckoterminal.com/solana/tokens/${mint}`, `https://rugcheck.xyz/tokens/${mint}`, 'https://app.streamflow.finance/'],
   };
 }

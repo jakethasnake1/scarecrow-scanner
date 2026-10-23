@@ -7,7 +7,7 @@ export const Route = createFileRoute('/')({
   head: () => ({
     meta: [
       { title: 'SCARECROW // Solana Signal Scanner' },
-      { name: 'description', content: 'Scarecrow V4: holder-aware, age-aware, confidence-labeled, evidence-based Solana token grades using available on-chain and DEX data.' },
+      { name: 'description', content: 'Scarecrow V4.1: multi-provider holder, indexed-control and age-aware, confidence-labeled, evidence-based Solana token grades using available on-chain and DEX data.' },
       { property: 'og:title', content: 'SCARECROW // Solana Signal Scanner' },
       { property: 'og:description', content: 'Feed it a mint. It watches the field. Now with evidence-based provisional grades and confidence labels.' },
     ],
@@ -24,7 +24,9 @@ type ScanResponse = {
   market: { name: string | null; symbol: string | null; poolCount: number; similar: Similar[]; duplicateCaveat: string; primaryPool: null | { dex: string; liquidityUsd: number | null; volume24hUsd: number | null; volume6hUsd?: number | null; volume1hUsd?: number | null; marketCap?: number | null; fdv?: number | null; pairCreatedAt?: number | null; url: string } }
   concentration: null | { top10TokenAccountsPct: number; caveat: string }
   holders: { holders: number | null; source: string | null; marketCapUsed: number | null; marketCapPerHolder: number | null; holdersPer100kCap: number | null; holderTop20Pct: number | null; holderTop1Pct: number | null; holderTop10Pct: number | null; caveat: string }
-  age: { createdAt: number | null; ageDays: number | null; ageSource: string | null; firstTradingAt: number | null; tradingDays: number | null; tradingAgeSource: string | null; caveat: string }
+  age: { createdAt: number | null; ageDays: number | null; ageSource: string | null; observedAt?: number | null; observedDays?: number | null; observedSource?: string | null; firstTradingAt: number | null; tradingDays: number | null; tradingAgeSource: string | null; caveat: string }
+  indexedControls?: { mintAuthority: string | null; freezeAuthority: string | null; source: string } | null
+  sourceHealth?: Record<string, string>
   locks: { status: 'verified' | 'not_verified'; lockedAmount: number | null; lockedPct: number | null; unlockAt: number | null; contracts: string[]; source: string | null }
 
   coverage: Record<string, boolean>
@@ -288,8 +290,8 @@ function Dashboard({ r }: { r: ScanResponse }) {
   const pool = r.market.primaryPool
   const valid = r.onchain.exists === true && r.coverage.onchain
   const bars: { label: string; value: number | null; annotation: string }[] = [
-    { label: 'MINT CONTROLS', value: !valid ? null : r.onchain.mintAuthority ? 25 : 100, annotation: !valid ? 'Unknown' : r.onchain.mintAuthority ? 'Authority active' : 'Authority revoked' },
-    { label: 'FREEZE CONTROLS', value: !valid ? null : r.onchain.freezeAuthority ? 25 : 100, annotation: !valid ? 'Unknown' : r.onchain.freezeAuthority ? 'Authority active' : 'Authority revoked' },
+    { label: 'MINT CONTROLS', value: valid ? r.onchain.mintAuthority ? 25 : 100 : r.indexedControls ? r.indexedControls.mintAuthority ? 15 : 70 : null, annotation: valid ? (r.onchain.mintAuthority ? 'Authority active' : 'Authority revoked') : r.indexedControls ? (r.indexedControls.mintAuthority ? 'Active · indexed' : 'None · indexed only') : 'Unknown' },
+    { label: 'FREEZE CONTROLS', value: valid ? r.onchain.freezeAuthority ? 25 : 100 : r.indexedControls ? r.indexedControls.freezeAuthority ? 15 : 70 : null, annotation: valid ? (r.onchain.freezeAuthority ? 'Authority active' : 'Authority revoked') : r.indexedControls ? (r.indexedControls.freezeAuthority ? 'Active · indexed' : 'None · indexed only') : 'Unknown' },
     { label: 'INDEXED LIQUIDITY', value: pool?.liquidityUsd === null || pool?.liquidityUsd === undefined ? null : Math.max(0, Math.min(100, Math.round(pool.liquidityUsd / 100000 * 100))), annotation: money(pool?.liquidityUsd) },
     { label: '24H MARKET ACTIVITY', value: pool?.volume24hUsd === null || pool?.volume24hUsd === undefined ? null : Math.max(0, Math.min(100, Math.round(pool.volume24hUsd / 250000 * 100))), annotation: money(pool?.volume24hUsd) },
     { label: 'HOLDER PARTICIPATION', value: r.holders?.holders == null ? null : Math.max(0, Math.min(100, Math.round(r.holders.holders / 1000 * 100))), annotation: r.holders?.holders == null ? 'Holder feed unavailable' : `${compact(r.holders.holders)} observed holders` },
@@ -306,7 +308,7 @@ function Dashboard({ r }: { r: ScanResponse }) {
   return (
     <section className="mt-10 grid gap-4 md:grid-cols-3" aria-label="Solana token scan results">
       <div className="panel animate-rise flex min-w-0 flex-col items-center rounded-2xl p-6">
-        <p className="text-xs tracking-widest text-muted-foreground">HARVEST GRADE · V4 EVIDENCE-WEIGHTED</p>
+        <p className="text-xs tracking-widest text-muted-foreground">HARVEST GRADE · V4.1 MULTI-SOURCE</p>
         <div className="relative my-4 h-44 w-44">
           <svg viewBox="0 0 160 160" className="h-full w-full -rotate-90" aria-hidden="true">
             <circle cx="80" cy="80" r="70" fill="none" stroke="var(--muted)" strokeWidth="8" />
@@ -348,10 +350,12 @@ function Dashboard({ r }: { r: ScanResponse }) {
         { label: 'DEX LIQUIDITY', value: money(pool?.liquidityUsd) },
         { label: '24H VOLUME', value: money(pool?.volume24hUsd) },
         { label: 'MARKET CAP / FDV (DEX)', value: money(pool?.marketCap ?? pool?.fdv) },
+        { label: 'LIQUIDITY ÷ MARKET CAP · INDEXED', value: pool?.marketCap && pool?.liquidityUsd != null ? `${(pool.liquidityUsd / pool.marketCap * 100).toFixed(1)}%` : 'UNAVAILABLE' },
         { label: 'TOKEN HOLDERS · INDEXED', value: compact(r.holders?.holders) },
         { label: 'MARKET CAP ÷ HOLDER', value: money(r.holders?.marketCapPerHolder) },
         { label: 'HOLDERS PER $100K MARKET CAP', value: compact(r.holders?.holdersPer100kCap) },
         { label: 'TOKEN AGE · FIRST MINT/CREATION', value: days(r.age?.ageDays) },
+        { label: 'EARLIEST INDEXER DETECTION', value: days(r.age?.observedDays) },
         { label: 'INDEXED TRADING AGE', value: days(r.age?.tradingDays) },
         { label: 'STREAMFLOW LOCKED SUPPLY', value: r.locks?.status === 'verified' && r.locks.lockedAmount != null ? compact(r.locks.lockedAmount) : 'NOT VERIFIED' },
       ].map((s, i) => (
@@ -374,7 +378,7 @@ function Dashboard({ r }: { r: ScanResponse }) {
             {r.locks?.status === 'verified' && <p className="mt-2 text-accent">Earliest observed unlock: {when(r.locks.unlockAt)}</p>}
             <a className="mt-2 inline-block text-primary underline" href="https://app.streamflow.finance/" target="_blank" rel="noopener noreferrer">Verify token contracts on Streamflow ↗</a></div>
         </div>
-        <p className="mt-3 text-[10px] text-muted-foreground">TOKEN AGE: {when(r.age?.createdAt)} ({r.age?.ageSource || 'not observed'}). TRADING AGE: {when(r.age?.firstTradingAt)} ({r.age?.tradingAgeSource || 'not observed'}). {r.age?.caveat}</p>
+        <p className="mt-3 text-[10px] text-muted-foreground">TOKEN AGE: {when(r.age?.createdAt)} ({r.age?.ageSource || 'not observed'}). FIRST INDEXER DETECTION: {when(r.age?.observedAt)} ({r.age?.observedSource || 'not observed'}; not proof of token creation). TRADING AGE: {when(r.age?.firstTradingAt)} ({r.age?.tradingAgeSource || 'not observed'}). {r.age?.caveat}</p>
       </div>
 
       <div className="panel animate-rise min-w-0 rounded-2xl p-6 md:col-span-2" style={{ animationDelay: '.4s' }}>
@@ -423,6 +427,19 @@ function Dashboard({ r }: { r: ScanResponse }) {
       </div>
 
       <div className="panel animate-rise min-w-0 rounded-2xl p-6 md:col-span-3">
+        <p className="mb-3 text-xs tracking-widest text-muted-foreground">UPSTREAM SOURCE HEALTH · WHY DATA IS MISSING</p>
+        <div className="grid grid-cols-2 gap-3 text-xs md:grid-cols-3">
+          {Object.entries(r.sourceHealth || {}).map(([provider, status]) => (
+            <div key={provider} className="rounded-lg border border-primary/20 bg-background/50 p-3">
+              <p className="uppercase text-muted-foreground">{provider.replace(/([a-z])([A-Z])/g, '$1 $2')}</p>
+              <p className={status === 'OK' ? 'mt-1 text-primary' : 'mt-1 text-accent'}>{status.replaceAll('_', ' ')}</p>
+            </div>
+          ))}
+        </div>
+        <p className="mt-3 text-[10px] leading-5 text-muted-foreground">NOT CONFIGURED requires a server-side provider key. RATE LIMITED, NO DATA, and NOT INDEXED are different failures. RugCheck controls are third-party indexed evidence, not direct RPC verification. No keys or sensitive errors are exposed here.</p>
+      </div>
+
+      <div className="panel animate-rise min-w-0 rounded-2xl p-6 md:col-span-3">
         <p className="mb-3 text-xs tracking-widest text-muted-foreground">GRADE EXPLANATION & DATA COVERAGE</p>
         <div className="grid gap-4 md:grid-cols-2">
           <div>
@@ -437,7 +454,7 @@ function Dashboard({ r }: { r: ScanResponse }) {
           </div>
         </div>
         <p className="mt-4 text-[10px] leading-5 text-accent">Confidence measures evidence coverage, not the probability that a coin is safe. A DEX-only grade does not verify mint or freeze controls.</p>
-        <p className="mt-5 break-words text-[10px] leading-5 text-muted-foreground">Checked {new Date(r.checkedAt).toLocaleString()} · Sources: {r.sourceLinks.map((link) => <a key={link} className="mr-3 inline-block text-primary underline" href={link} target="_blank" rel="noopener noreferrer">{link.includes('solscan') ? 'SOLSCAN ↗' : link.includes('geckoterminal') ? 'GECKOTERMINAL ↗' : link.includes('streamflow') ? 'STREAMFLOW ↗' : 'DEX SCREENER ↗'}</a>)}</p>
+        <p className="mt-5 break-words text-[10px] leading-5 text-muted-foreground">Checked {new Date(r.checkedAt).toLocaleString()} · Sources: {r.sourceLinks.map((link) => <a key={link} className="mr-3 inline-block text-primary underline" href={link} target="_blank" rel="noopener noreferrer">{link.includes('solscan') ? 'SOLSCAN ↗' : link.includes('geckoterminal') ? 'GECKOTERMINAL ↗' : link.includes('rugcheck') ? 'RUGCHECK ↗' : link.includes('streamflow') ? 'STREAMFLOW ↗' : 'DEX SCREENER ↗'}</a>)}</p>
       </div>
 
       <Reactions mint={r.mint} tokenLabel={r.market.symbol ? `$${r.market.symbol}` : ''} />

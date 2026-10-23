@@ -66,14 +66,15 @@ export async function getSolscanIntel(mint) {
   const cached = solscanCache.get(mint);
   if (cached && cached.expires > Date.now()) return cached.data;
   const headers = { 'token': key };
-  const paths = ['token/meta', 'token/statistic'];
+  const paths = ['token/meta', 'token/statistic', 'token/holders?page=1&page_size=10'];
   const results = await Promise.allSettled(paths.map(path =>
-    fetchJson(`https://pro-api.solscan.io/v2.0/${path}?address=${encodeURIComponent(mint)}`, { headers })
+    fetchJson(`https://pro-api.solscan.io/v2.0/${path}${path.includes('?') ? '&' : '?'}address=${encodeURIComponent(mint)}`, { headers })
   ));
   if (results.every(r => r.status === 'rejected')) throw new Error('solscan_api_unavailable');
   const data = {
     profile: results[0].status === 'fulfilled' && results[0].value?.success ? results[0].value : null,
     statistics: results[1].status === 'fulfilled' && results[1].value?.success ? results[1].value : null,
+    holderList: results[2].status === 'fulfilled' && results[2].value?.success ? results[2].value : null,
   };
   solscanCache.set(mint, { data, expires: Date.now() + 10 * 60_000 });
   if (solscanCache.size > 200) solscanCache.clear();
@@ -87,11 +88,25 @@ export async function getGeckoIntel(mint) {
   const cached = geckoCache.get(mint);
   if (cached && cached.expires > Date.now()) return cached.data;
   try {
-    const data = await fetchJson(`https://api.geckoterminal.com/api/v2/networks/solana/tokens/${encodeURIComponent(mint)}/info`);
+    const data = await fetchJson(`https://api.geckoterminal.com/api/v2/networks/solana/tokens/${encodeURIComponent(mint)}/info`, { headers: { accept: 'application/json;version=20230203' } });
     const attributes = data?.data?.attributes;
-    if (!attributes || data.data.id && !String(data.data.id).endsWith(`_${mint}`)) return null;
+    if (!attributes || (data.data.id && !String(data.data.id).endsWith(`_${mint}`))) return null;
     geckoCache.set(mint, { data: attributes, expires: Date.now() + 5 * 60_000 });
     if (geckoCache.size > 200) geckoCache.clear();
     return attributes;
-  } catch { return null; }
+  } catch (error) { throw error; }
+}
+
+// An independent fallback for holder counts and indexed mint control observations.
+// RugCheck is a third-party indexer, not direct RPC verification. Never translate
+// its pool/LP lock assessments into verified Streamflow lock contracts.
+const rugcheckCache = new Map();
+export async function getRugcheckIntel(mint) {
+  const cached = rugcheckCache.get(mint);
+  if (cached && cached.expires > Date.now()) return cached.data;
+  const data = await fetchJson(`https://api.rugcheck.xyz/v1/tokens/${encodeURIComponent(mint)}/report`);
+  if (!data || data.mint !== mint) return null;
+  rugcheckCache.set(mint, { data, expires: Date.now() + 10 * 60_000 });
+  if (rugcheckCache.size > 200) rugcheckCache.clear();
+  return data;
 }

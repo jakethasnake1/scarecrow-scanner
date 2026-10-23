@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { analyzeMarket, scan } from '../src/server-core/scanner.mjs';
-import { holderMetrics, interpretGeckoData, interpretSolscanData, tokenAgeMetrics, validateVerifiedLocks } from '../src/server-core/market-intel.mjs';
+import { holderMetrics, interpretGeckoData, interpretSolscanData, tokenAgeMetrics, validateVerifiedLocks, interpretRugcheckData } from '../src/server-core/market-intel.mjs';
 const mint = 'GtV6g1ey2NERrcbvL5bdzrxRJQDfxpMaLU9oLtRipump';
 const quote = 'So11111111111111111111111111111111111111112';
 const pair = (ms, cap = 150000) => ({ chainId:'solana', dexId:'raydium', baseToken:{address:mint,name:'CROW',symbol:'CROW'}, quoteToken:{address:quote, name:'SOL',symbol:'SOL'}, pairCreatedAt: ms, liquidity:{usd:33000}, volume:{h24:3100}, marketCap:cap });
@@ -53,4 +53,49 @@ test('holder count and indexed age improve bounded provisional grade but do not 
   assert.equal(withHolder.holders.holders,600);
   assert.equal(withHolder.age.tradingDays,60);
   assert.equal(withHolder.locks.status,'not_verified');
+});
+
+test('RugCheck indexed count and authority status are scoped to the exact mint', () => {
+  const ok = interpretRugcheckData({ mint, totalHolders: 670, mintAuthority: null, freezeAuthority: null, detectedAt: '2026-10-02T14:00:00Z' }, mint);
+  assert.equal(ok.holders, 670);
+  assert.equal(ok.controlsAvailable, true);
+  assert.equal(interpretRugcheckData({ mint: quote, totalHolders: 100000 }, mint), null);
+  assert.equal(interpretRugcheckData({ mint, totalHolders: 100 }, mint).controlsAvailable, false);
+});
+test('RugCheck indexed holder counts can support a bounded C+ without direct RPC, never certifying locks', async () => {
+  const data = { mint, totalHolders: 670, mintAuthority: null, freezeAuthority: null, detectedAt: '2026-10-02T14:00:00Z' };
+  const deps = { getMintAccount: async () => { throw Error('rate limit'); }, getMarketPairs: async () => [pair(Date.now()-21*86400000)],
+    searchSimilarTokens: async () => [], getSolscanIntel: async () => null, getGeckoIntel: async () => null, getRugcheckIntel: async () => data };
+  const result = await scan(mint,deps);
+  assert.equal(result.holders.holders,670);
+  assert.equal(result.holders.source,'RugCheck (indexed)');
+  assert.equal(result.grade.grade,'C+');
+  assert.equal(result.grade.confidence,'LOW');
+  assert.ok(result.grade.score <=77);
+  assert.equal(result.sourceHealth.solanaRPC,'UNAVAILABLE');
+  assert.equal(result.indexedControls.mintAuthority,null);
+  assert.equal(result.onchain.verified,false);
+  assert.equal(result.locks.status,'not_verified');
+  assert.equal(result.age.ageDays,null);
+  assert.ok(result.age.observedDays >= 0);
+});
+test('Third-party indexed active authorities reduce score, and cannot override verified RPC',async()=>{
+  const deps={getMintAccount:async()=>{throw Error('timeout')},getMarketPairs:async()=>[pair(Date.now()-21*86400000)],
+    searchSimilarTokens:async()=>[],getSolscanIntel:async()=>null,getGeckoIntel:async()=>null,
+    getRugcheckIntel:async()=>({mint,totalHolders:200,mintAuthority:null,freezeAuthority:null})};
+  const positive=await scan(mint,deps);
+  const flagged=await scan(mint,{...deps,getRugcheckIntel:async()=>({mint,totalHolders:200,mintAuthority:quote,freezeAuthority:quote})});
+  assert.ok(positive.grade.score > flagged.grade.score);
+  assert.equal(flagged.grade.confidence,'LOW');
+});
+
+test('relative liquidity rewards modest market depth for ALL eligible tokens, not a special mint', async()=>{
+  const other='CbQEShoNUwmTwYY5HDxmKLWNARUMJoSTpTJThSVEPUMP';
+  const deps={getMintAccount:async()=>{throw Error('no rpc')},getMarketPairs:async(m)=>[
+    { ...pair(Date.now()-21*86400000),baseToken:{address:m,name:'OTHER',symbol:'OTH'},liquidity:{usd:33593},marketCap:153198 }],
+    searchSimilarTokens:async()=>[],getGeckoIntel:async()=>null,getSolscanIntel:async()=>null,getRugcheckIntel:async(m)=>({mint:m,totalHolders:150,mintAuthority:null,freezeAuthority:null})};
+  const crow=await scan(mint,deps);
+  const otherCoin=await scan(other,deps);
+  assert.equal(crow.grade.grade, otherCoin.grade.grade);
+  assert.ok(crow.grade.score>=73);
 });
