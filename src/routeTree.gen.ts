@@ -12,6 +12,10 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ApiV1ScanRouteImport } from './routes/api/v1/scan'
 import { Route as ApiV1SearchRouteImport } from './routes/api/v1/search'
+import { Route as ApiV1CommunityIndexRouteImport } from './routes/api/v1/community/index'
+import { Route as ApiV1CommunitySubmitRouteImport } from './routes/api/v1/community/submit'
+import { Route as ApiV1CommunitySuggestRouteImport } from './routes/api/v1/community/suggest'
+import { Route as ApiV1CommunityVoteRouteImport } from './routes/api/v1/community/vote'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -28,35 +32,93 @@ const ApiV1SearchRoute = ApiV1SearchRouteImport.update({
   path: '/api/v1/search',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiV1CommunityIndexRoute = ApiV1CommunityIndexRouteImport.update({
+  id: '/api/v1/community/',
+  path: '/api/v1/community/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiV1CommunitySubmitRoute = ApiV1CommunitySubmitRouteImport.update({
+  id: '/api/v1/community/submit',
+  path: '/api/v1/community/submit',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiV1CommunitySuggestRoute = ApiV1CommunitySuggestRouteImport.update({
+  id: '/api/v1/community/suggest',
+  path: '/api/v1/community/suggest',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiV1CommunityVoteRoute = ApiV1CommunityVoteRouteImport.update({
+  id: '/api/v1/community/vote',
+  path: '/api/v1/community/vote',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/api/v1/scan': typeof ApiV1ScanRoute
   '/api/v1/search': typeof ApiV1SearchRoute
+  '/api/v1/community/submit': typeof ApiV1CommunitySubmitRoute
+  '/api/v1/community/suggest': typeof ApiV1CommunitySuggestRoute
+  '/api/v1/community/vote': typeof ApiV1CommunityVoteRoute
+  '/api/v1/community/': typeof ApiV1CommunityIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/api/v1/scan': typeof ApiV1ScanRoute
   '/api/v1/search': typeof ApiV1SearchRoute
+  '/api/v1/community/submit': typeof ApiV1CommunitySubmitRoute
+  '/api/v1/community/suggest': typeof ApiV1CommunitySuggestRoute
+  '/api/v1/community/vote': typeof ApiV1CommunityVoteRoute
+  '/api/v1/community': typeof ApiV1CommunityIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/api/v1/scan': typeof ApiV1ScanRoute
   '/api/v1/search': typeof ApiV1SearchRoute
+  '/api/v1/community/submit': typeof ApiV1CommunitySubmitRoute
+  '/api/v1/community/suggest': typeof ApiV1CommunitySuggestRoute
+  '/api/v1/community/vote': typeof ApiV1CommunityVoteRoute
+  '/api/v1/community/': typeof ApiV1CommunityIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/api/v1/scan' | '/api/v1/search'
+  fullPaths:
+    | '/'
+    | '/api/v1/scan'
+    | '/api/v1/search'
+    | '/api/v1/community/submit'
+    | '/api/v1/community/suggest'
+    | '/api/v1/community/vote'
+    | '/api/v1/community/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/api/v1/scan' | '/api/v1/search'
-  id: '__root__' | '/' | '/api/v1/scan' | '/api/v1/search'
+  to:
+    | '/'
+    | '/api/v1/scan'
+    | '/api/v1/search'
+    | '/api/v1/community/submit'
+    | '/api/v1/community/suggest'
+    | '/api/v1/community/vote'
+    | '/api/v1/community'
+  id:
+    | '__root__'
+    | '/'
+    | '/api/v1/scan'
+    | '/api/v1/search'
+    | '/api/v1/community/submit'
+    | '/api/v1/community/suggest'
+    | '/api/v1/community/vote'
+    | '/api/v1/community/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ApiV1ScanRoute: typeof ApiV1ScanRoute
   ApiV1SearchRoute: typeof ApiV1SearchRoute
+  ApiV1CommunitySubmitRoute: typeof ApiV1CommunitySubmitRoute
+  ApiV1CommunitySuggestRoute: typeof ApiV1CommunitySuggestRoute
+  ApiV1CommunityVoteRoute: typeof ApiV1CommunityVoteRoute
+  ApiV1CommunityIndexRoute: typeof ApiV1CommunityIndexRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -82,6 +144,34 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiV1SearchRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/v1/community/': {
+      id: '/api/v1/community/'
+      path: '/api/v1/community'
+      fullPath: '/api/v1/community/'
+      preLoaderRoute: typeof ApiV1CommunityIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/v1/community/submit': {
+      id: '/api/v1/community/submit'
+      path: '/api/v1/community/submit'
+      fullPath: '/api/v1/community/submit'
+      preLoaderRoute: typeof ApiV1CommunitySubmitRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/v1/community/suggest': {
+      id: '/api/v1/community/suggest'
+      path: '/api/v1/community/suggest'
+      fullPath: '/api/v1/community/suggest'
+      preLoaderRoute: typeof ApiV1CommunitySuggestRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/v1/community/vote': {
+      id: '/api/v1/community/vote'
+      path: '/api/v1/community/vote'
+      fullPath: '/api/v1/community/vote'
+      preLoaderRoute: typeof ApiV1CommunityVoteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -89,6 +179,10 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ApiV1ScanRoute: ApiV1ScanRoute,
   ApiV1SearchRoute: ApiV1SearchRoute,
+  ApiV1CommunitySubmitRoute: ApiV1CommunitySubmitRoute,
+  ApiV1CommunitySuggestRoute: ApiV1CommunitySuggestRoute,
+  ApiV1CommunityVoteRoute: ApiV1CommunityVoteRoute,
+  ApiV1CommunityIndexRoute: ApiV1CommunityIndexRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
